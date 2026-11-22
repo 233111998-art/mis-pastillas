@@ -8,6 +8,7 @@ import 'package:timezone/data/latest_all.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
 import '../config.dart';
+import '../models/cita.dart';
 import '../models/medicina.dart';
 import '../utils/fechas.dart';
 
@@ -18,15 +19,25 @@ class RespuestaAviso {
     required this.minutos,
     required this.dia,
     required this.desdeBoton,
-  });
+  }) : citaId = null;
+
+  const RespuestaAviso.cita(String this.citaId)
+      : medId = '',
+        minutos = 0,
+        dia = null,
+        desdeBoton = false;
 
   final String medId;
   final int minutos;
-  final DateTime dia;
+  final DateTime? dia;
 
   /// true si tocaron el botón "Ya me la tomé" del aviso.
   final bool desdeBoton;
 
+  /// Si el aviso era de una consulta o laboratorio.
+  final String? citaId;
+
+  bool get esCita => citaId != null;
   bool get esPrueba => medId == Notificaciones.idPrueba;
 }
 
@@ -37,6 +48,8 @@ class Notificaciones {
 
   static const String canalId = 'recordatorio_pastillas';
   static const String canalNombre = 'Recordatorios de pastillas';
+  static const String canalCitasId = 'recordatorio_citas';
+  static const String canalCitasNombre = 'Consultas y laboratorios';
   static const String accionTomada = 'ya_me_la_tome';
   static const String categoriaIOS = 'dosis';
   static const String idPrueba = 'prueba';
@@ -109,6 +122,14 @@ class Notificaciones {
         importance: Importance.max,
       ),
     );
+    await _android?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        canalCitasId,
+        canalCitasNombre,
+        description: 'Avisos de tus consultas y estudios de laboratorio',
+        importance: Importance.high,
+      ),
+    );
 
     _listo = true;
   }
@@ -167,6 +188,9 @@ class Notificaciones {
     if (payload == null || payload.isEmpty) return null;
     try {
       final datos = jsonDecode(payload) as Map<String, dynamic>;
+      if (datos['tipo'] == 'cita') {
+        return RespuestaAviso.cita(datos['cita'] as String);
+      }
       final minutos = (datos['min'] as num).toInt();
       final fecha = datos['fecha'] as String?;
       return RespuestaAviso(
@@ -216,6 +240,24 @@ class Notificaciones {
     );
   }
 
+  NotificationDetails _detallesCita(String cuerpoLargo) {
+    return NotificationDetails(
+      android: AndroidNotificationDetails(
+        canalCitasId,
+        canalCitasNombre,
+        channelDescription: 'Avisos de tus consultas y estudios de laboratorio',
+        icon: 'ic_notificacion',
+        color: const Color(0xFF6F4E37),
+        importance: Importance.high,
+        priority: Priority.high,
+        category: AndroidNotificationCategory.reminder,
+        visibility: NotificationVisibility.public,
+        styleInformation: BigTextStyleInformation(cuerpoLargo),
+      ),
+      iOS: const DarwinNotificationDetails(presentAlert: true, presentSound: true),
+    );
+  }
+
   Future<AndroidScheduleMode> _modo() async {
     if (!_esAndroid) return AndroidScheduleMode.exactAllowWhileIdle;
     final exactas = await alarmasExactasPermitidas();
@@ -224,8 +266,15 @@ class Notificaciones {
         : AndroidScheduleMode.inexactAllowWhileIdle;
   }
 
+  tz.TZDateTime _en(DateTime dia, int minutos) => tz.TZDateTime(
+      tz.local, dia.year, dia.month, dia.day, minutos ~/ 60, minutos % 60);
+
   /// Borra los avisos pendientes y los vuelve a programar todos.
-  Future<void> reprogramar(List<Medicina> medicinas) async {
+  Future<void> reprogramar({
+    required List<Medicina> medicinas,
+    required List<Cita> citas,
+    required String nombre,
+  }) async {
     if (!_listo) return;
 
     await _plugin.cancelAllPendingNotifications();
@@ -234,63 +283,141 @@ class Notificaciones {
     final ahora = tz.TZDateTime.now(tz.local);
     final hoy = DateTime(ahora.year, ahora.month, ahora.day);
     var id = 1;
+    bool hayLugar() => id <= _maxAvisos;
 
-    for (final m in medicinas) {
-      if (m.terminadaEn(hoy)) continue;
-
+    // 1) Pastillas para siempre: avisos que se repiten solos.
+    for (final m in medicinas.where((m) => m.esPermanente)) {
       for (final minutos in m.horarios) {
-        if (id > _maxAvisos) return;
-
-        if (m.esPermanente) {
-          // Un solo aviso que se repite todos los días a la misma hora.
-          var cuando = tz.TZDateTime(
-            tz.local, ahora.year, ahora.month, ahora.day, minutos ~/ 60, minutos % 60);
-          if (!cuando.isAfter(ahora)) cuando = cuando.add(const Duration(days: 1));
-          await _programar(id++, m, minutos, cuando, modo, repetirDiario: true);
+        if (!m.cambiaPorDia) {
+          // Misma dosis diario: un aviso que se repite todos los días.
+          if (!hayLugar()) return;
+          var cuando = _en(hoy, minutos);
+          if (!cuando.isAfter(ahora)) cuando = _en(sumarDias(hoy, 1), minutos);
+          await _programarToma(id++, m, minutos, cuando, modo, nombre,
+              diaDeLaDosis: cuando, repetir: DateTimeComponents.time);
         } else {
-          // Un aviso por cada día que falta del tratamiento.
-          final fin = m.fechaFin!;
-          var dia = m.fechaInicio.isAfter(hoy) ? m.fechaInicio : hoy;
-          while (!dia.isAfter(fin) && id <= _maxAvisos) {
-            final cuando = tz.TZDateTime(
-                tz.local, dia.year, dia.month, dia.day, minutos ~/ 60, minutos % 60);
-            if (cuando.isAfter(ahora)) {
-              await _programar(id++, m, minutos, cuando, modo, dia: dia);
-            }
-            dia = sumarDias(dia, 1);
+          // Dosis según el día: un aviso semanal por cada día que le toca,
+          // con la dosis de ese día.
+          for (final diaSemana in m.dosisPorDia.keys) {
+            if (!hayLugar()) return;
+            final faltan = (diaSemana - hoy.weekday + 7) % 7;
+            var cuando = _en(sumarDias(hoy, faltan), minutos);
+            if (!cuando.isAfter(ahora)) cuando = _en(sumarDias(hoy, faltan + 7), minutos);
+            await _programarToma(id++, m, minutos, cuando, modo, nombre,
+                diaDeLaDosis: cuando, repetir: DateTimeComponents.dayOfWeekAndTime);
           }
+        }
+      }
+    }
+
+    // 2) Consultas y laboratorios.
+    for (final c in citas) {
+      if (!c.fecha.isAfter(ahora)) continue;
+      if (c.avisoDiaAntes) {
+        final cuando = _en(sumarDias(c.fecha, -1), kHoraAvisoDiaAntes);
+        if (cuando.isAfter(ahora) && hayLugar()) {
+          await _programarCita(id++, c, cuando, modo, diaAntes: true);
+        }
+      }
+      if (c.avisoHorasAntes > 0) {
+        final cuando = tz.TZDateTime.from(c.fecha, tz.local)
+            .subtract(Duration(hours: c.avisoHorasAntes));
+        if (cuando.isAfter(ahora) && hayLugar()) {
+          await _programarCita(id++, c, cuando, modo, diaAntes: false);
+        }
+      }
+    }
+
+    // 3) Pastillas por unos días: un aviso por cada día que falta.
+    for (final m in medicinas.where((m) => !m.esPermanente)) {
+      if (m.terminadaEn(hoy)) continue;
+      final fin = m.fechaFin!;
+      for (final minutos in m.horarios) {
+        var dia = m.fechaInicio.isAfter(hoy) ? m.fechaInicio : hoy;
+        while (!dia.isAfter(fin)) {
+          if (!hayLugar()) return;
+          final cuando = _en(dia, minutos);
+          if (m.activaEn(dia) && cuando.isAfter(ahora)) {
+            await _programarToma(id++, m, minutos, cuando, modo, nombre,
+                diaDeLaDosis: cuando, fechaEnPayload: dia);
+          }
+          dia = sumarDias(dia, 1);
         }
       }
     }
   }
 
-  Future<void> _programar(
+  Future<void> _programarToma(
     int id,
     Medicina m,
     int minutos,
     tz.TZDateTime cuando,
-    AndroidScheduleMode modo, {
-    bool repetirDiario = false,
-    DateTime? dia,
+    AndroidScheduleMode modo,
+    String nombre, {
+    required DateTime diaDeLaDosis,
+    DateTimeComponents? repetir,
+    DateTime? fechaEnPayload,
   }) async {
     final hora = formatoHora(minutos);
-    final cuerpo = '${m.titulo} · $hora';
+    final cuerpo = '${m.tituloEn(diaDeLaDosis)} · $hora';
     final notas = m.notas.trim().isEmpty ? '' : '\n${m.notas.trim()}';
     final cuerpoLargo = '$cuerpo$notas\nToca aquí cuando te la tomes.';
+    final titulo = nombre.trim().isEmpty
+        ? 'Es hora de tu pastilla 💊'
+        : '${nombre.trim()}, es hora de tu pastilla 💊';
 
     await _plugin.zonedSchedule(
       id: id,
-      title: '$kNombreUsuaria, es hora de tu pastilla 💊',
+      title: titulo,
       body: cuerpo,
       scheduledDate: cuando,
       notificationDetails: _detalles(cuerpoLargo),
       androidScheduleMode: modo,
-      matchDateTimeComponents: repetirDiario ? DateTimeComponents.time : null,
+      matchDateTimeComponents: repetir,
       payload: jsonEncode({
         'med': m.id,
         'min': minutos,
-        if (dia != null) 'fecha': claveFecha(dia),
+        if (fechaEnPayload != null) 'fecha': claveFecha(fechaEnPayload),
       }),
+    );
+  }
+
+  Future<void> _programarCita(
+    int id,
+    Cita c,
+    tz.TZDateTime cuando,
+    AndroidScheduleMode modo, {
+    required bool diaAntes,
+  }) async {
+    final hora = formatoHoraDe(c.fecha);
+    final que = c.esLaboratorio ? 'estudio de laboratorio' : 'consulta';
+    final icono = c.esLaboratorio ? '🧪' : '🩺';
+
+    final String titulo;
+    if (diaAntes) {
+      titulo = c.esLaboratorio && c.ayunas
+          ? 'Mañana vas al laboratorio: ¡en ayunas! $icono'
+          : 'Mañana tienes $que $icono';
+    } else {
+      final horas = c.avisoHorasAntes == 1 ? '1 hora' : '${c.avisoHorasAntes} horas';
+      titulo = 'Tu $que es en $horas $icono';
+    }
+
+    final lineas = <String>[
+      '${c.titulo} · $hora',
+      if (c.lugar.trim().isNotEmpty) c.lugar.trim(),
+      if (c.esLaboratorio && c.ayunas) 'Recuerda ir en ayunas.',
+      if (c.notas.trim().isNotEmpty) c.notas.trim(),
+    ];
+
+    await _plugin.zonedSchedule(
+      id: id,
+      title: titulo,
+      body: lineas.first,
+      scheduledDate: cuando,
+      notificationDetails: _detallesCita(lineas.join('\n')),
+      androidScheduleMode: modo,
+      payload: jsonEncode({'tipo': 'cita', 'cita': c.id}),
     );
   }
 

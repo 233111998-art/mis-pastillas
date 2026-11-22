@@ -257,6 +257,39 @@ class _TarjetaMedicina extends StatelessWidget {
                   ),
               ],
             ),
+            if (m.cambiaPorDia) ...[
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Cafe.crema,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Dosis según el día',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: Cafe.textoSuave,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    for (final linea in m.resumenDosisPorDia())
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          linea,
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
             if (m.notas.trim().isNotEmpty) ...[
               const SizedBox(height: 10),
               Text(

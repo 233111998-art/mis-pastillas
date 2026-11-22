@@ -1,28 +1,40 @@
-# Mis Pastillas · app para Sukey 💊
+# Mis Pastillas 💊
 
 App sencilla en Flutter para que mamá no olvide sus pastillas y siempre pueda
 revisar si ya se tomó una.
 
 ## Qué hace
 
-- **Bienvenida** personalizada: "¡Bienvenida, Sukey!" con saludo según la hora.
-- **Lista de pastillas** con dos tipos:
+- **Registro de nombre** la primera vez: cada familiar escribe su nombre y elige
+  "Bienvenida" o "Bienvenido". Se puede cambiar en ⚙️ Ajustes (arriba en "Hoy").
+- **Pastillas** con dos tipos:
   - **Para siempre** (ej. Losartán): avisa todos los días a la misma hora.
   - **Por unos días** (ej. un antibiótico): eliges cuántos días (3, 5, 7… hasta 90)
     y desde qué día; al terminar deja de avisar sola.
-  - Cada pastilla puede tener varias horas, dosis, notas ("con el desayuno") y un color.
-- **Avisos** a la hora de cada toma, con el botón **"Ya me la tomé ✓"**:
-  - Tocar el botón abre la app y la registra con la hora exacta.
-  - Tocar el aviso abre la app y pregunta "¿Ya te tomaste tu pastilla?".
-  - Si ya estaba registrada, la app le dice **"Ya te la tomaste a las 8:05 a. m. –
-    No necesitas tomarla otra vez"** (para evitar dosis dobles).
-- **Hoy**: avance del día (2 de 4), tomas pendientes, las que ya pasaron de hora
-  y las tomadas con su hora.
+  - **Dosis que cambia según el día**: por ejemplo "lunes y martes 1 tableta,
+    miércoles a viernes ½ tableta". Los días sin marcar no le toca.
+  - Varias horas por pastilla, notas ("con el desayuno") y un color.
+- **Avisos** a la hora de cada toma, con el botón **"Ya me la tomé ✓"**.
+  - El botón **se bloquea hasta la hora de la toma** (no se puede marcar antes).
+    Si quieres un margen, cambia `kMinutosAntesPermitidos` en `lib/config.dart`.
+  - Si ya estaba registrada, avisa **"Ya te la tomaste a las 8:05 a. m."** para evitar dosis dobles.
+- **Agenda** de **consultas** y **laboratorios** con calendario:
+  - Fecha, hora, lugar, notas y "ir en ayunas" para laboratorio.
+  - Avisos un día antes (8:00 p. m.) y 1, 2 o 3 horas antes.
+  - La próxima cita de la semana aparece también en "Hoy".
 - **Historial** de los últimos 14 días.
-- Botón de **avisos** (campana arriba en "Hoy") para revisar permisos y mandar un aviso de prueba.
 
 Todo se guarda en el teléfono (no necesita internet ni cuenta).
 Está pensada para **Android**; en iPhone haría falta una Mac con Xcode y pasos extra.
+
+## Actualizar a una versión nueva
+
+1. Reemplaza la carpeta `lib`, la carpeta `test` y el archivo `pubspec.yaml` por los nuevos.
+2. `flutter pub get`
+3. `flutter build apk --release`
+4. Publica un Release nuevo en GitHub (por ejemplo `v1.1`) con el `app-release.apk`.
+5. Instala el APK nuevo **encima** del anterior: no se borra lo guardado
+   (siempre que compiles desde la misma computadora).
 
 ## Cómo correrla
 
@@ -85,7 +97,9 @@ Necesitas Flutter 3.32 o más nuevo (`flutter --version`).
 
 ## Personalizar
 
-- Nombre: `lib/config.dart` → `kNombreUsuaria`.
+- Nombre: se escribe en la app (⚙️ Ajustes → Tu nombre).
+- Margen para marcar antes de la hora: `lib/config.dart` → `kMinutosAntesPermitidos`.
+- Hora del aviso "mañana tienes cita": `lib/config.dart` → `kHoraAvisoDiaAntes`.
 - Colores: `lib/theme.dart` (clase `Cafe`).
 - Nombre de la app en el teléfono: `android:label` en
   `android/app/src/main/AndroidManifest.xml`.
@@ -96,12 +110,13 @@ Necesitas Flutter 3.32 o más nuevo (`flutter --version`).
 lib/
   main.dart                 arranque: carga datos y programa avisos
   app.dart                  MaterialApp + qué pasa al tocar un aviso
-  config.dart               nombre de la usuaria
+  config.dart               ajustes rápidos (margen del botón, hora de avisos)
   theme.dart                paleta café y estilos
-  models/medicina.dart      Medicina, Dosis y estados
+  models/medicina.dart      Medicina (dosis fija o por día), Dosis y estados
+  models/cita.dart          Cita (consulta o laboratorio)
   data/app_state.dart       guardado (shared_preferences) y registro de tomas
   services/notificaciones.dart  avisos programados (flutter_local_notifications)
-  screens/                  bienvenida, hoy, mis pastillas, editar, historial
+  screens/                  registro, bienvenida, hoy, pastillas, agenda, historial y formularios
   widgets/                  hoja "¿Ya te la tomaste?", selector de hora, etc.
 android/app/src/main/
   AndroidManifest.xml       permisos y receptores de avisos

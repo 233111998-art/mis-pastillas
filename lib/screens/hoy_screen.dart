@@ -5,12 +5,15 @@ import 'package:flutter/material.dart';
 import '../app.dart';
 import '../config.dart';
 import '../data/app_state.dart';
+import '../models/cita.dart';
 import '../models/medicina.dart';
 import '../services/notificaciones.dart';
 import '../theme.dart';
 import '../utils/fechas.dart';
+import '../widgets/cita_widgets.dart';
 import '../widgets/comunes.dart';
 import '../widgets/confirmar_toma_sheet.dart';
+import 'registro_screen.dart';
 
 class HoyScreen extends StatefulWidget {
   const HoyScreen({super.key, required this.alAgregar});
@@ -27,8 +30,8 @@ class _HoyScreenState extends State<HoyScreen> {
   @override
   void initState() {
     super.initState();
-    // Cada minuto revisa si alguna toma ya "pasó la hora".
-    _reloj = Timer.periodic(const Duration(minutes: 1), (_) {
+    // Revisa seguido si alguna toma ya llegó a su hora (para desbloquear el botón).
+    _reloj = Timer.periodic(const Duration(seconds: 15), (_) {
       if (mounted) setState(() {});
     });
   }
@@ -40,7 +43,11 @@ class _HoyScreenState extends State<HoyScreen> {
   }
 
   Future<void> _marcar(Dosis d) async {
-    await AppState.instance.marcarTomada(d.medicina.id, d.dia, d.minutos);
+    final ok = await AppState.instance.marcarTomada(d.medicina.id, d.dia, d.minutos);
+    if (!ok) {
+      mostrarMensaje('Todavía no es hora de esta toma.');
+      return;
+    }
     final hora = AppState.instance.tomadaA(d.medicina.id, d.dia, d.minutos);
     mostrarMensaje(
       hora == null
@@ -71,6 +78,11 @@ class _HoyScreenState extends State<HoyScreen> {
         final estado = AppState.instance;
         final dosis = estado.dosisDelDia(ahora);
         final tomadas = dosis.where((d) => d.tomadaA != null).length;
+        final proximas = estado
+            .proximasCitas(ahora)
+            .where((c) => diasEntre(ahora, c.fecha) <= 7)
+            .toList();
+        final Cita? proxima = proximas.isEmpty ? null : proximas.first;
 
         return CustomScrollView(
           slivers: [
@@ -81,6 +93,23 @@ class _HoyScreenState extends State<HoyScreen> {
                 tomadas: tomadas,
               ),
             ),
+            if (proxima != null)
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 18, 16, 0),
+                sliver: SliverToBoxAdapter(
+                  child: TarjetaCita(
+                    cita: proxima,
+                    ahora: ahora,
+                    etiquetaArriba: proximas.length > 1
+                        ? 'Próxima cita (+${proximas.length - 1} esta semana)'
+                        : 'Próxima cita',
+                    alTocar: () {
+                      estado.pestana.value = AppState.pestanaAgenda;
+                      estado.citaEnfocada.value = proxima.id;
+                    },
+                  ),
+                ),
+              ),
             if (estado.medicinas.isEmpty)
               SliverFillRemaining(
                 hasScrollBody: false,
@@ -104,7 +133,7 @@ class _HoyScreenState extends State<HoyScreen> {
                   child: EstadoVacio(
                     icono: Icons.wb_sunny_rounded,
                     titulo: 'Hoy no te toca ninguna',
-                    mensaje: 'Disfruta tu día. Revisa "Mis pastillas" para ver las próximas.',
+                    mensaje: 'Disfruta tu día. Revisa la pestaña "Pastillas" para ver las próximas.',
                   ),
                 ),
               )
@@ -181,9 +210,9 @@ class _Encabezado extends StatelessWidget {
                         color: Cafe.latte.withValues(alpha: 0.9),
                       ),
                     ),
-                    const Text(
-                      kNombreUsuaria,
-                      style: TextStyle(
+                    Text(
+                      AppState.instance.nombre,
+                      style: const TextStyle(
                         fontSize: 34,
                         fontWeight: FontWeight.w800,
                         color: Colors.white,
@@ -202,14 +231,14 @@ class _Encabezado extends StatelessWidget {
                 ),
               ),
               IconButton(
-                tooltip: 'Avisos',
+                tooltip: 'Ajustes',
                 onPressed: () => mostrarAjustesAvisos(context),
                 style: IconButton.styleFrom(
                   backgroundColor: Colors.white.withValues(alpha: 0.14),
                   foregroundColor: Colors.white,
                   minimumSize: const Size(52, 52),
                 ),
-                icon: const Icon(Icons.notifications_active_rounded, size: 26),
+                icon: const Icon(Icons.settings_rounded, size: 26),
               ),
             ],
           ),
@@ -305,6 +334,11 @@ class TarjetaDosis extends StatelessWidget {
   final VoidCallback alMarcar;
   final VoidCallback alTocar;
 
+  int get _minutosDesbloqueo {
+    final m = dosis.minutos - kMinutosAntesPermitidos;
+    return m < 0 ? 0 : m;
+  }
+
   @override
   Widget build(BuildContext context) {
     final m = dosis.medicina;
@@ -332,9 +366,18 @@ class TarjetaDosis extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      m.titulo,
+                      m.nombre,
                       style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
                     ),
+                    if (dosis.dosisTexto.isNotEmpty)
+                      Text(
+                        m.cambiaPorDia ? 'Hoy toca: ${dosis.dosisTexto}' : dosis.dosisTexto,
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                          color: m.cambiaPorDia ? Cafe.caramelo : Cafe.cafeMedio,
+                        ),
+                      ),
                     if (m.notas.trim().isNotEmpty)
                       Text(
                         m.notas.trim(),
@@ -389,16 +432,29 @@ class TarjetaDosis extends StatelessWidget {
                     ),
             ),
             const SizedBox(height: 12),
-            FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: atrasada ? Cafe.cafe : Cafe.latte,
-                foregroundColor: atrasada ? Colors.white : Cafe.espresso,
-                minimumSize: const Size.fromHeight(56),
+            if (atrasada)
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Cafe.cafe,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size.fromHeight(56),
+                ),
+                onPressed: alMarcar,
+                icon: const Icon(Icons.check_rounded, size: 26),
+                label: const Text('Ya me la tomé'),
+              )
+            else
+              // Bloqueado hasta la hora de la toma.
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  disabledBackgroundColor: const Color(0xFFEFE6DC),
+                  disabledForegroundColor: Cafe.textoSuave,
+                  minimumSize: const Size.fromHeight(56),
+                ),
+                onPressed: null,
+                icon: const Icon(Icons.lock_clock_rounded, size: 24),
+                label: Text('Se activa a las ${formatoHora(_minutosDesbloqueo)}'),
               ),
-              onPressed: alMarcar,
-              icon: const Icon(Icons.check_rounded, size: 26),
-              label: const Text('Ya me la tomé'),
-            ),
           ],
         ],
       ),
@@ -455,6 +511,14 @@ class _AjustesAvisosState extends State<_AjustesAvisos> {
     });
   }
 
+  void _cambiarNombre() {
+    final nav = Navigator.of(context);
+    nav.pop(); // cierra Ajustes
+    nav.push(
+      MaterialPageRoute<void>(builder: (_) => const RegistroScreen()),
+    );
+  }
+
   Future<void> _activarAvisos() async {
     final ok = await _avisos.pedirPermisos();
     await _revisar();
@@ -485,13 +549,43 @@ class _AjustesAvisosState extends State<_AjustesAvisos> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Avisos', style: Theme.of(context).textTheme.headlineSmall),
+          Text('Ajustes', style: Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height: 14),
+          Tarjeta(
+            color: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            onTap: _cambiarNombre,
+            child: Row(
+              children: [
+                const Icon(Icons.person_rounded, color: Cafe.cafe, size: 28),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Tu nombre',
+                        style: TextStyle(fontSize: 14, color: Cafe.textoSuave),
+                      ),
+                      Text(
+                        AppState.instance.nombre,
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                      ),
+                    ],
+                  ),
+                ),
+                TextButton(onPressed: _cambiarNombre, child: const Text('Cambiar')),
+              ],
+            ),
+          ),
+          const SizedBox(height: 22),
+          Text('Avisos', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 4),
           const Text(
             'Revisa que todo esté listo para que te lleguen los recordatorios.',
             style: TextStyle(fontSize: 16, color: Cafe.textoSuave),
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 14),
           _fila(
             icono: Icons.notifications_rounded,
             titulo: 'Permiso para avisar',

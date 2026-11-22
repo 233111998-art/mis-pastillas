@@ -25,6 +25,43 @@ const List<String> _meses = [
   'diciembre',
 ];
 
+/// Letras para el calendario y los botones de días (lunes = índice 0).
+const List<String> letrasDias = ['L', 'M', 'Mi', 'J', 'V', 'S', 'D'];
+
+/// Abreviaturas de los días (lunes = índice 0).
+const List<String> diasCortos = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+
+/// "Noviembre 2026"
+String nombreMes(DateTime d) => '${_capital(_meses[d.month - 1])} ${d.year}';
+
+/// Une días de la semana (1 = lunes … 7 = domingo) en texto corto:
+/// [1, 2] -> "Lun y Mar"; [3, 4, 5, 6, 7] -> "Mié a Dom"; los 7 -> "Todos los días".
+String textoDias(Iterable<int> dias) {
+  final lista = dias.toSet().toList()..sort();
+  if (lista.isEmpty) return '';
+  if (lista.length == 7) return 'Todos los días';
+
+  // Agrupa días seguidos: 3 o más seguidos se escriben "Mié a Vie".
+  final partes = <String>[];
+  var i = 0;
+  while (i < lista.length) {
+    var j = i;
+    while (j + 1 < lista.length && lista[j + 1] == lista[j] + 1) {
+      j++;
+    }
+    if (j - i >= 2) {
+      partes.add('${diasCortos[lista[i] - 1]} a ${diasCortos[lista[j] - 1]}');
+    } else {
+      for (var k = i; k <= j; k++) {
+        partes.add(diasCortos[lista[k] - 1]);
+      }
+    }
+    i = j + 1;
+  }
+  if (partes.length == 1) return partes.first;
+  return '${partes.sublist(0, partes.length - 1).join(', ')} y ${partes.last}';
+}
+
 /// Quita la hora y deja solo el día.
 DateTime soloFecha(DateTime d) => DateTime(d.year, d.month, d.day);
 

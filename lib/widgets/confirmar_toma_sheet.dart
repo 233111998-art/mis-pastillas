@@ -29,7 +29,7 @@ Future<void> mostrarConfirmacionToma(
   );
 }
 
-enum _Vista { pregunta, recienMarcada, yaTomada }
+enum _Vista { pregunta, recienMarcada, yaTomada, temprano }
 
 class ConfirmarTomaSheet extends StatefulWidget {
   const ConfirmarTomaSheet({
@@ -66,21 +66,30 @@ class _ConfirmarTomaSheetState extends State<ConfirmarTomaSheet> {
       _vista = _Vista.recienMarcada;
     } else if (_tomadaA != null) {
       _vista = _Vista.yaTomada;
+    } else if (!tomaDisponible(widget.dia, widget.minutos, DateTime.now())) {
+      // Todavía no es la hora: no se puede marcar.
+      _vista = _Vista.temprano;
     } else {
       _vista = _Vista.pregunta;
     }
   }
 
+  String get _titulo => widget.medicina.tituloEn(widget.dia);
+
   Future<void> _marcar() async {
-    await _estado.marcarTomada(widget.medicina.id, widget.dia, widget.minutos);
+    final ok = await _estado.marcarTomada(widget.medicina.id, widget.dia, widget.minutos);
     if (!mounted) return;
-    setState(() => _vista = _Vista.recienMarcada);
+    setState(() => _vista = ok ? _Vista.recienMarcada : _Vista.temprano);
   }
 
   Future<void> _deshacer() async {
     await _estado.desmarcar(widget.medicina.id, widget.dia, widget.minutos);
     if (!mounted) return;
-    setState(() => _vista = _Vista.pregunta);
+    setState(() {
+      _vista = tomaDisponible(widget.dia, widget.minutos, DateTime.now())
+          ? _Vista.pregunta
+          : _Vista.temprano;
+    });
   }
 
   String get _cuandoEsLaDosis {
@@ -107,6 +116,7 @@ class _ConfirmarTomaSheetState extends State<ConfirmarTomaSheet> {
           _Vista.pregunta => _pregunta(context),
           _Vista.recienMarcada => _listo(context),
           _Vista.yaTomada => _yaTomada(context),
+          _Vista.temprano => _temprano(context),
         },
       ),
     );
@@ -125,7 +135,7 @@ class _ConfirmarTomaSheetState extends State<ConfirmarTomaSheet> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  m.titulo,
+                  _titulo,
                   style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 2),
@@ -205,15 +215,15 @@ class _ConfirmarTomaSheetState extends State<ConfirmarTomaSheet> {
         Center(child: _circulo(Icons.check_rounded, Cafe.verde, Cafe.verdeClaro)),
         const SizedBox(height: 18),
         Text(
-          '¡Listo, $kNombreUsuaria!',
+          AppState.instance.nombre.isEmpty ? '¡Listo!' : '¡Listo, ${AppState.instance.nombre}!',
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.headlineMedium,
         ),
         const SizedBox(height: 8),
         Text(
           hora == null
-              ? 'Quedó registrada tu toma de ${widget.medicina.titulo}.'
-              : 'Quedó registrada tu toma de ${widget.medicina.titulo} '
+              ? 'Quedó registrada tu toma de $_titulo.'
+              : 'Quedó registrada tu toma de $_titulo '
                   'a las ${formatoHoraDe(hora)}.',
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 18, color: Cafe.textoSuave),
@@ -227,6 +237,40 @@ class _ConfirmarTomaSheetState extends State<ConfirmarTomaSheet> {
         TextButton(
           onPressed: _deshacer,
           child: const Text('Deshacer, todavía no me la tomo'),
+        ),
+      ],
+    );
+  }
+
+  Widget _temprano(BuildContext context) {
+    final hora = formatoHoraDe(
+      momentoDeToma(widget.dia, widget.minutos)
+          .subtract(const Duration(minutes: kMinutosAntesPermitidos)),
+    );
+    return Column(
+      key: const ValueKey('temprano'),
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Center(child: _circulo(Icons.lock_clock_rounded, Cafe.cafe, Cafe.latte)),
+        const SizedBox(height: 18),
+        Text(
+          'Todavía no es hora',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.headlineMedium,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Podrás marcarla a partir de las $hora. Te llegará un aviso.',
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 18, color: Cafe.textoSuave),
+        ),
+        const SizedBox(height: 18),
+        _resumen(),
+        const SizedBox(height: 24),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Entendido'),
         ),
       ],
     );

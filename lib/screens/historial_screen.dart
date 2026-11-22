@@ -156,7 +156,7 @@ class _FilaDosis extends StatelessWidget {
           ),
           Expanded(
             child: Text(
-              dosis.medicina.titulo,
+              dosis.titulo,
               style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
             ),
           ),

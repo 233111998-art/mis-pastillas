@@ -1,8 +1,8 @@
 name: sukey_pastillas
-description: "Recordatorio de pastillas para Sukey."
+description: "Recordatorio de pastillas y agenda médica para la familia."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: ^3.8.0

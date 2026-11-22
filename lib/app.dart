@@ -5,6 +5,7 @@ import 'config.dart';
 import 'data/app_state.dart';
 import 'screens/bienvenida_screen.dart';
 import 'screens/inicio_screen.dart';
+import 'screens/registro_screen.dart';
 import 'services/notificaciones.dart';
 import 'theme.dart';
 import 'widgets/confirmar_toma_sheet.dart';
@@ -87,7 +88,21 @@ class _SukeyAppState extends State<SukeyApp> with WidgetsBindingObserver {
   }
 
   Future<void> _mostrarAviso(RespuestaAviso respuesta) async {
-    AppState.instance.pestana.value = 0;
+    final estado = AppState.instance;
+
+    // Aviso de una consulta o laboratorio: abre la Agenda en esa cita.
+    final citaId = respuesta.citaId;
+    if (citaId != null) {
+      if (estado.buscarCita(citaId) == null) {
+        mostrarMensaje('Esa cita ya no está en tu agenda.');
+        return;
+      }
+      estado.pestana.value = AppState.pestanaAgenda;
+      estado.citaEnfocada.value = citaId;
+      return;
+    }
+
+    estado.pestana.value = AppState.pestanaHoy;
 
     if (respuesta.esPrueba) {
       mostrarMensaje(respuesta.desdeBoton
@@ -96,18 +111,16 @@ class _SukeyAppState extends State<SukeyApp> with WidgetsBindingObserver {
       return;
     }
 
-    final estado = AppState.instance;
     final medicina = estado.buscar(respuesta.medId);
-    if (medicina == null) {
+    final dia = respuesta.dia;
+    if (medicina == null || dia == null) {
       mostrarMensaje('Esa pastilla ya no está en tu lista.');
       return;
     }
 
     var recienMarcada = false;
-    if (respuesta.desdeBoton &&
-        estado.tomadaA(medicina.id, respuesta.dia, respuesta.minutos) == null) {
-      await estado.marcarTomada(medicina.id, respuesta.dia, respuesta.minutos);
-      recienMarcada = true;
+    if (respuesta.desdeBoton && estado.tomadaA(medicina.id, dia, respuesta.minutos) == null) {
+      recienMarcada = await estado.marcarTomada(medicina.id, dia, respuesta.minutos);
     }
 
     final contexto = navigatorKey.currentState?.overlay?.context;
@@ -116,7 +129,7 @@ class _SukeyAppState extends State<SukeyApp> with WidgetsBindingObserver {
     await mostrarConfirmacionToma(
       contexto,
       medicina: medicina,
-      dia: respuesta.dia,
+      dia: dia,
       minutos: respuesta.minutos,
       recienMarcada: recienMarcada,
     );
@@ -139,7 +152,11 @@ class _SukeyAppState extends State<SukeyApp> with WidgetsBindingObserver {
       ],
       home: _respuestaInicial != null
           ? const InicioScreen()
-          : const BienvenidaScreen(),
+          : AppState.instance.tienePerfil
+              // Ya escribió su nombre: bienvenida personalizada.
+              ? const BienvenidaScreen()
+              // Primera vez: le pedimos su nombre.
+              : const RegistroScreen(primeraVez: true),
     );
   }
 }

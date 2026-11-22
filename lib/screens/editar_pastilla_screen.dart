@@ -33,6 +33,10 @@ class _EditarPastillaScreenState extends State<EditarPastillaScreen> {
   late int _color;
   bool _guardando = false;
 
+  /// false = misma dosis diario; true = cambia según el día de la semana.
+  late bool _porDia;
+  final List<_GrupoDosis> _grupos = [];
+
   bool get _esNueva => widget.medicina == null;
 
   static const _diasRapidos = [3, 5, 7, 10, 14, 30];
@@ -50,6 +54,17 @@ class _EditarPastillaScreenState extends State<EditarPastillaScreen> {
     _horarios = [...?m?.horarios];
     if (_horarios.isEmpty) _horarios = [8 * 60];
     _color = m?.color ?? (AppState.instance.medicinas.length % Cafe.pastillas.length);
+
+    _porDia = m?.cambiaPorDia ?? false;
+    if (m != null && m.cambiaPorDia) {
+      // Reconstruye los grupos: días con la misma dosis van juntos.
+      final porTexto = <String, Set<int>>{};
+      for (var dia = 1; dia <= 7; dia++) {
+        final d = m.dosisPorDia[dia];
+        if (d != null) porTexto.putIfAbsent(d, () => <int>{}).add(dia);
+      }
+      porTexto.forEach((texto, dias) => _grupos.add(_GrupoDosis(texto, dias)));
+    }
   }
 
   @override
@@ -57,6 +72,9 @@ class _EditarPastillaScreenState extends State<EditarPastillaScreen> {
     _nombre.dispose();
     _dosis.dispose();
     _notas.dispose();
+    for (final g in _grupos) {
+      g.dispose();
+    }
     super.dispose();
   }
 
@@ -109,12 +127,75 @@ class _EditarPastillaScreenState extends State<EditarPastillaScreen> {
     setState(() => _dias = valor.clamp(1, kMaxDiasTemporal).toInt());
   }
 
+  void _cambiarModoDosis(bool porDia) {
+    setState(() {
+      _porDia = porDia;
+      if (porDia && _grupos.isEmpty) {
+        // Empieza con un grupo de todos los días con la dosis que ya escribió.
+        _grupos.add(_GrupoDosis(_dosis.text.trim(), {1, 2, 3, 4, 5, 6, 7}));
+      }
+    });
+  }
+
+  void _agregarGrupo() {
+    if (_grupos.length >= 7) return;
+    setState(() => _grupos.add(_GrupoDosis('', <int>{})));
+  }
+
+  void _quitarGrupo(_GrupoDosis g) {
+    if (_grupos.length == 1) return;
+    setState(() => _grupos.remove(g));
+    // Se libera después de que la pantalla deje de usar su campo de texto.
+    WidgetsBinding.instance.addPostFrameCallback((_) => g.dispose());
+  }
+
+  /// Un día solo puede estar en un grupo: al marcarlo aquí se quita de los demás.
+  void _tocarDia(_GrupoDosis g, int dia) {
+    setState(() {
+      if (g.dias.contains(dia)) {
+        g.dias.remove(dia);
+      } else {
+        for (final otro in _grupos) {
+          otro.dias.remove(dia);
+        }
+        g.dias.add(dia);
+      }
+    });
+  }
+
+  /// Valida los grupos y arma el mapa día -> dosis. null si hay un error.
+  Map<int, String>? _dosisPorDiaValida() {
+    final mapa = <int, String>{};
+    for (final g in _grupos) {
+      if (g.dias.isEmpty) continue;
+      final texto = g.texto.text.trim();
+      if (texto.isEmpty) {
+        mostrarMensaje('Escribe la dosis de ${textoDias(g.dias)}.');
+        return null;
+      }
+      for (final dia in g.dias) {
+        mapa[dia] = texto;
+      }
+    }
+    if (mapa.isEmpty) {
+      mostrarMensaje('Marca al menos un día en el que te toca.');
+      return null;
+    }
+    return mapa;
+  }
+
   Future<void> _guardar() async {
     if (_guardando) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (_horarios.isEmpty) {
       mostrarMensaje('Agrega al menos una hora.');
       return;
+    }
+    Map<int, String> porDia = const {};
+    if (_porDia) {
+      final valida = _dosisPorDiaValida();
+      if (valida == null) return;
+      porDia = valida;
     }
 
     setState(() => _guardando = true);
@@ -132,7 +213,8 @@ class _EditarPastillaScreenState extends State<EditarPastillaScreen> {
     final medicina = Medicina(
       id: base?.id ?? AppState.instance.nuevoId(),
       nombre: _nombre.text.trim(),
-      dosis: _dosis.text.trim(),
+      dosis: _porDia ? '' : _dosis.text.trim(),
+      dosisPorDia: porDia,
       notas: _notas.text.trim(),
       tipo: _tipo,
       horarios: _horarios,
@@ -184,17 +266,62 @@ class _EditarPastillaScreenState extends State<EditarPastillaScreen> {
               validator: (v) =>
                   (v == null || v.trim().isEmpty) ? 'Escribe el nombre de la pastilla' : null,
             ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _dosis,
-              textInputAction: TextInputAction.next,
-              style: const TextStyle(fontSize: 18),
-              decoration: const InputDecoration(
-                labelText: 'Dosis (opcional)',
-                hintText: 'Ej. 50 mg o 1 tableta',
-                prefixIcon: Icon(Icons.scale_rounded),
-              ),
+
+            const _Pregunta('¿Cuánto tomas?'),
+            SegmentedButton<bool>(
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(
+                  value: false,
+                  icon: Icon(Icons.repeat_rounded),
+                  label: Text('Siempre igual'),
+                ),
+                ButtonSegment(
+                  value: true,
+                  icon: Icon(Icons.calendar_view_week_rounded),
+                  label: Text('Cambia por día'),
+                ),
+              ],
+              selected: {_porDia},
+              onSelectionChanged: (s) => _cambiarModoDosis(s.first),
             ),
+            const SizedBox(height: 12),
+            if (!_porDia)
+              TextFormField(
+                controller: _dosis,
+                textInputAction: TextInputAction.next,
+                style: const TextStyle(fontSize: 18),
+                decoration: const InputDecoration(
+                  labelText: 'Dosis (opcional)',
+                  hintText: 'Ej. 50 mg o 1 tableta',
+                  prefixIcon: Icon(Icons.scale_rounded),
+                ),
+              )
+            else ...[
+              const Text(
+                'Escribe cada dosis y marca los días que te toca. '
+                'Los días que no marques, no te toca esta pastilla.',
+                style: TextStyle(fontSize: 16, color: Cafe.textoSuave),
+              ),
+              const SizedBox(height: 12),
+              for (var i = 0; i < _grupos.length; i++) ...[
+                _TarjetaGrupo(
+                  key: ObjectKey(_grupos[i]),
+                  numero: i + 1,
+                  grupo: _grupos[i],
+                  puedeQuitar: _grupos.length > 1,
+                  alTocarDia: (dia) => _tocarDia(_grupos[i], dia),
+                  alQuitar: () => _quitarGrupo(_grupos[i]),
+                ),
+                const SizedBox(height: 12),
+              ],
+              if (_grupos.length < 7)
+                OutlinedButton.icon(
+                  onPressed: _agregarGrupo,
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('Agregar otra dosis'),
+                ),
+            ],
 
             const _Pregunta('¿Por cuánto tiempo?'),
             SegmentedButton<TipoTratamiento>(
@@ -539,6 +666,143 @@ class _CirculoColor extends StatelessWidget {
             ],
           ),
           child: elegido ? const Icon(Icons.check_rounded, color: Colors.white, size: 28) : null,
+        ),
+      ),
+    );
+  }
+}
+
+/// Una dosis y los días en que se toma.
+class _GrupoDosis {
+  _GrupoDosis(String texto, Set<int> dias)
+      : texto = TextEditingController(text: texto),
+        dias = {...dias};
+
+  final TextEditingController texto;
+  final Set<int> dias;
+
+  void dispose() => texto.dispose();
+}
+
+class _TarjetaGrupo extends StatelessWidget {
+  const _TarjetaGrupo({
+    super.key,
+    required this.numero,
+    required this.grupo,
+    required this.puedeQuitar,
+    required this.alTocarDia,
+    required this.alQuitar,
+  });
+
+  final int numero;
+  final _GrupoDosis grupo;
+  final bool puedeQuitar;
+  final ValueChanged<int> alTocarDia;
+  final VoidCallback alQuitar;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tarjeta(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(16, 12, 8, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Dosis $numero',
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                ),
+              ),
+              if (puedeQuitar)
+                IconButton(
+                  tooltip: 'Quitar esta dosis',
+                  onPressed: alQuitar,
+                  icon: const Icon(Icons.delete_outline_rounded, color: Cafe.rojo),
+                ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: TextField(
+              controller: grupo.texto,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+              decoration: const InputDecoration(
+                hintText: 'Ej. 1 tableta',
+                prefixIcon: Icon(Icons.scale_rounded),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            '¿Qué días?',
+            style: TextStyle(fontSize: 15, color: Cafe.textoSuave, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Row(
+              children: [
+                for (var dia = 1; dia <= 7; dia++) ...[
+                  if (dia > 1) const SizedBox(width: 6),
+                  Expanded(
+                    child: _BotonDia(
+                      letra: letrasDias[dia - 1],
+                      elegido: grupo.dias.contains(dia),
+                      alTocar: () => alTocarDia(dia),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BotonDia extends StatelessWidget {
+  const _BotonDia({
+    required this.letra,
+    required this.elegido,
+    required this.alTocar,
+  });
+
+  final String letra;
+  final bool elegido;
+  final VoidCallback alTocar;
+
+  @override
+  Widget build(BuildContext context) {
+    return AspectRatio(
+      aspectRatio: 1,
+      child: Material(
+        color: elegido ? Cafe.cafe : Cafe.crema,
+        shape: CircleBorder(
+          side: BorderSide(color: elegido ? Cafe.cafe : Cafe.borde, width: 1.4),
+        ),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: alTocar,
+          child: Center(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Text(
+                  letra,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: elegido ? Colors.white : Cafe.espresso,
+                  ),
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );

@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app.dart';
-import '../config.dart';
 import '../data/app_state.dart';
 import '../services/notificaciones.dart';
 import '../theme.dart';
@@ -121,9 +120,9 @@ class _BienvenidaScreenState extends State<BienvenidaScreen> {
           ),
         ),
         const SizedBox(height: 4),
-        const Text(
-          '¡Bienvenida,\n$kNombreUsuaria!',
-          style: TextStyle(
+        Text(
+          '¡${AppState.instance.palabraBienvenida},\n${AppState.instance.nombre}!',
+          style: const TextStyle(
             fontSize: 46,
             height: 1.05,
             fontWeight: FontWeight.w800,
