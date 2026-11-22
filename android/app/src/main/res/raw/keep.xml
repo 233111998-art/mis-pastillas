@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Evita que la versión "release" borre el icono de las notificaciones. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_notificacion,@drawable/ic_launcher_fondo,@drawable/ic_launcher_frente,@mipmap/ic_launcher" />
